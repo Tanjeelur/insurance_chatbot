@@ -75,9 +75,9 @@ async def analyze_coverage(
             percentage_score=result["percentage_score"],
             likelihood_ranking=result["likelihood_ranking"],
             explanation=result["explanation"],
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            processing_info=processing_info
+            # session_id=session_id,
+            # timestamp=datetime.now().isoformat(),
+            # processing_info=processing_info
         )
         
     except Exception as e:
