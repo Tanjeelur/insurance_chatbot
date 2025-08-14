@@ -21,6 +21,7 @@ def get_insurance_analyzer() -> InsuranceAnalyzer:
 async def analyze_coverage(
     policy_disclosure: UploadFile = File(..., description="Policy Disclosure Statement PDF"),
     schedule_coverage: UploadFile = File(..., description="Schedule of Coverage PDF"),
+    insurance_type: str = Form(..., description="Type of insurance (e.g., auto, home, health, construction etc)"),
     question: str = Form(..., description="Your question about insurance coverage"),
     pdf_extractor: PDFExtractor = Depends(get_pdf_extractor),
     analyzer: InsuranceAnalyzer = Depends(get_insurance_analyzer)
@@ -37,6 +38,7 @@ async def analyze_coverage(
     # Validate question
     if not question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
+    
     
     try:
         # Read PDF files
@@ -57,18 +59,18 @@ async def analyze_coverage(
 """
         
         # Analyze coverage immediately
-        result = analyzer.analyze_coverage(combined_text, question)
+        result = analyzer.analyze_coverage(combined_text, question, insurance_type)
         
-        # Create session ID for tracking
-        session_id = str(uuid.uuid4())
+        # # Create session ID for tracking
+        # session_id = str(uuid.uuid4())
         
-        # Prepare processing info
-        processing_info = {
-            "policy_pages_extracted": len(policy_text.split('\n\n')),
-            "schedule_pages_extracted": len(schedule_text.split('\n\n')),
-            "total_characters": len(combined_text),
-            "question_length": len(question)
-        }
+        # # Prepare processing info
+        # processing_info = {
+        #     "policy_pages_extracted": len(policy_text.split('\n\n')),
+        #     "schedule_pages_extracted": len(schedule_text.split('\n\n')),
+        #     "total_characters": len(combined_text),
+        #     "question_length": len(question)
+        # }
         
         # Prepare response
         return CoverageResponse(

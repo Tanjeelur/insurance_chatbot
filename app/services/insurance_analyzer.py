@@ -77,15 +77,15 @@ class InsuranceAnalyzer:
             "likelihood_ranking": likelihood_ranking,
             "explanation": explanation
         }
-    
-    def analyze_coverage(self, pdf_content: str, question: str) -> dict:
+
+    def analyze_coverage(self, pdf_content: str, question: str, insurance_type: str) -> dict:
         """Analyze insurance coverage based on PDF content and user question"""
         
         # Structure the content
         structured_content = self.clean_and_structure_text(pdf_content)
         
         # Create the enhanced prompt based on model instructions
-        prompt = self._create_analysis_prompt(structured_content, question)
+        prompt = self._create_analysis_prompt(structured_content, question, insurance_type)
 
         try:
             response = self.client.chat.completions.create(
@@ -118,19 +118,21 @@ class InsuranceAnalyzer:
         except Exception as e:
             # Fallback response for any errors
             return self._get_error_fallback_response()
-    
-    def _create_analysis_prompt(self, structured_content: str, question: str) -> str:
+
+    def _create_analysis_prompt(self, structured_content: str, question: str, insurance_type: str) -> str:
         """Create the analysis prompt for OpenAI"""
         return f"""
-You are an expert insurance policy analyzer specializing in Product Disclosure Statements (PDS) and Schedules of Coverage. You must conduct a meticulous and conservative analysis of the insurance documentation to answer the user's coverage question.
+You are an expert insurance policy analyzer specializing in Product Disclosure Statements (PDS) and Schedules of Coverage. You must conduct a meticulous and conservative analysis of the {insurance_type} insurance documentation to answer the user's coverage question.
 
 INSURANCE DOCUMENTS:
 {structured_content}
 
 USER QUESTION: {question}
 
+INSURANCE TYPE: {insurance_type.title()} Insurance
+
 ANALYSIS REQUIREMENTS:
-1. Conduct a deep, comprehensive review of ALL relevant clauses, definitions, exclusions, and conditions
+1. Conduct a deep, comprehensive review of ALL relevant clauses, definitions, exclusions, and conditions specific to {insurance_type} insurance
 2. Ensure strict alignment between the user's question and relevant policy terms
 3. Avoid conflation of unrelated coverage areas
 4. Search thoroughly for dependencies, gaps, or ambiguities
