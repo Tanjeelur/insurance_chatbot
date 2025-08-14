@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+PyPDF2
+PyMuPDF
+openai
+pydantic
+pydantic-settings
+python-dotenv
