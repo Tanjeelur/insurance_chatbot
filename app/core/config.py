@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     PROJECT_VERSION: str = "2.0.0"
     API_V1_STR: str = "/api/v1"
 
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
+    OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     ALLOWED_ORIGINS: List[str] = ["*"]
     
     # Model Configuration
