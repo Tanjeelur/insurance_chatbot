@@ -61,7 +61,7 @@ class CoverageResponse(BaseModel):
     policy_wording_review: str
     explanation: str
     disclaimer: str
-    # session_id: str
+    policy_notes: list
     # timestamp: str
     # processing_info: Dict
     

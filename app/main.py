@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
-from app.api.v1.api import api_router
+from app.api.v1.endpoints import coverage
 
 # Get settings
 settings = get_settings()
@@ -11,7 +11,8 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     description=settings.PROJECT_DESCRIPTION,
     version=settings.PROJECT_VERSION,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    
 )
 
 # Add CORS middleware
@@ -23,8 +24,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Insurance Chatbot API"}
+
 # Include API router
-app.include_router(api_router, prefix=settings.API_V1_STR)
+app.include_router(coverage.router, prefix=settings.API_V1_STR, tags=["coverage"])
 
 if __name__ == "__main__":
     import uvicorn

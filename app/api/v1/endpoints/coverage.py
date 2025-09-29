@@ -120,7 +120,9 @@ from app.schemas.coverage import CoverageResponse, HealthResponse
 from app.services.pdf_extractor import PDFExtractor
 from app.services.insurance_analyzer import InsuranceAnalyzer
 
-router = APIRouter()
+router = APIRouter(
+    tags=["coverage"]
+)
 
 def get_pdf_extractor() -> PDFExtractor:
     """Dependency to get PDF extractor service"""
@@ -164,64 +166,25 @@ async def analyze_coverage(
         
         # Combine the texts
         combined_text = f"""
-=== POLICY DISCLOSURE STATEMENT ===
-{policy_text}
+                            === POLICY DISCLOSURE STATEMENT ===
+                            {policy_text}
 
-=== SCHEDULE OF COVERAGE ===
-{schedule_text}
-"""
+                            === SCHEDULE OF COVERAGE ===
+                            {schedule_text}
+                            """
         
         # Analyze coverage immediately
         result = analyzer.analyze_coverage(combined_text, question, insurance_type)
-        
-        # # Create session ID for tracking
-        # session_id = str(uuid.uuid4())
-        
-        # # Prepare processing info
-        # processing_info = {
-        #     "policy_pages_extracted": len(policy_text.split('\n\n')),
-        #     "schedule_pages_extracted": len(schedule_text.split('\n\n')),
-        #     "total_characters": len(combined_text),
-        #     "question_length": len(question)
-        # }
         
         # Prepare response - Updated field names to match InsuranceAnalyzer output
         return CoverageResponse(
             clarity_score=result["clarity_score"],
             policy_wording_review=result["policy_wording_review"],
             explanation=result["explanation"],
-            disclaimer=result["disclaimer"]
-            # session_id=session_id,
-            # timestamp=datetime.now().isoformat(),
-            # processing_info=processing_info
+            disclaimer=result["disclaimer"],
+            policy_notes=result["policy_notes"]
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 
-@router.get("/health", response_model=HealthResponse)
-async def health_check():
-    """Health check endpoint"""
-    return HealthResponse(
-        status="healthy",
-        timestamp=datetime.now().isoformat(),
-        model="Insurance Document Analyzer with Fine-tuned Instructions"
-    )
-
-@router.get("/")
-async def root():
-    """Root endpoint with API information"""
-    return {
-        "message": "Insurance Document Analyzer API - Modular Architecture",
-        "version": "2.0.0",
-        "description": "Upload PDS and Schedule PDFs with your coverage question to get immediate analysis",
-        "main_endpoint": "/analyze-coverage",
-        "features": [
-            "Single API call for complete analysis",
-            "Fine-tuned model with conservative assessment framework",
-            "Structured 40-word explanations",
-            "Clarity score-based confidence assessment",  # Updated description
-            "Professional insurance policy interpretation with mandatory disclaimer",  # Updated description
-            "Modular FastAPI architecture"
-        ]
-    }
