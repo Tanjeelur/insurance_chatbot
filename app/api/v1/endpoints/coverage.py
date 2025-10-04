@@ -178,6 +178,9 @@ async def analyze_coverage(
         
         # Prepare response - Updated field names to match InsuranceAnalyzer output
         return CoverageResponse(
+            policy_name=result["policy_name"],
+            policy_price=str(result["policy_price"]),
+            policy_renewal_date=result["policy_renewal_date"],
             clarity_score=result["clarity_score"],
             policy_wording_review=result["policy_wording_review"],
             explanation=result["explanation"],

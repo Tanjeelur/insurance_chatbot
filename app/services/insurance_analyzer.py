@@ -54,6 +54,9 @@ class InsuranceAnalyzer:
         
         # policy notes field validation
         policy_notes = result.get("policy_notes", [])
+        policy_name = result.get("policy_name", "N/A")
+        policy_price = result.get("policy_price", "N/A")
+        policy_renewal_date = result.get("policy_renewal_date", "N/A")
 
         
         # Map percentage to correct policy_wording_review
@@ -80,6 +83,9 @@ class InsuranceAnalyzer:
         disclaimer = "This interpretation is document-based only, not advice. Seek independent financial or legal guidance."
         
         return {
+            "policy_name": policy_name,
+            "policy_price": policy_price,
+            "policy_renewal_date": policy_renewal_date,
             "clarity_score": clarity_score,
             "policy_wording_review": policy_wording_review,
             "explanation": explanation,
@@ -106,14 +112,13 @@ class InsuranceAnalyzer:
                 temperature=self.settings.TEMPERATURE,
                 max_tokens=self.settings.MAX_TOKENS
             )
-            
+            print("RAW MODEL RESPONSE:", response)
             result = response.choices[0].message.content.strip()
             
             # Parse JSON response
             try:
                 parsed_result = json.loads(result)
             except json.JSONDecodeError:
-                # Try to extract JSON from the response if it's wrapped in other text
                 json_match = re.search(r'\{.*\}', result, re.DOTALL)
                 if json_match:
                     parsed_result = json.loads(json_match.group())
@@ -159,6 +164,9 @@ Only exceed 65% when documentation clearly supports coverage without major conti
 
 RESPONSE FORMAT (JSON):
 {{
+    "policy_name": "[Policy Name]",
+    "policy_price": [Policy Price],
+    "policy_renewal_date": "[Policy Renewal Date]",
     "clarity_score": [integer 0-100],
     "policy_wording_review": "[No Mention/Little Mention/Explicit Mention/Highly Explicit Mention]",
     "explanation": "[EXACTLY 40 words explaining the assessment, referencing relevant PDS/Schedule terms. Include third-party liability flags if applicable and listed event examples if relevant.]"
@@ -178,17 +186,25 @@ Respond with valid JSON only.
     def _get_fallback_response(self) -> dict:
         """Get fallback response when JSON parsing fails"""
         return {
+            "policy_name": "N/A",
+            "policy_price": "N/A",
+            "policy_renewal_date": "N/A",
             "clarity_score": 50,
             "policy_wording_review": "Little Mention",
             "explanation": "Unable to parse model response. Coverage assessment requires manual review of policy documentation for accurate determination of applicable terms and conditions.",
-            "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance."
+            "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance.",
+            "policy_notes": []
         }
     
     def _get_error_fallback_response(self) -> dict:
         """Get fallback response for technical errors"""
         return {
+            "policy_name": "N/A",
+            "policy_price": "N/A",
+            "policy_renewal_date": "N/A",
             "clarity_score": 50,
             "policy_wording_review": "Little Mention",
             "explanation": "Technical error occurred during analysis. Coverage determination requires manual review of policy terms conditions exclusions and applicable circumstances for accurate assessment.",
-            "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance."
+            "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance.",
+            "policy_notes": []
         }

@@ -57,29 +57,29 @@ class CoverageRequest(BaseModel):
         }
 
 class CoverageResponse(BaseModel):
+    policy_name: str = "N/A"
+    policy_price: str = "N/A"
+    policy_renewal_date: str = "N/A"
     clarity_score: int
     policy_wording_review: str
     explanation: str
     disclaimer: str
     policy_notes: list
-    # timestamp: str
-    # processing_info: Dict
     
     class Config:
         json_schema_extra = {
             "example": {
+                "policy_name": "Comprehensive Home Insurance",
+                "policy_price": "1200.00",
+                "policy_renewal_date": "2024-12-01T00:00:00Z",
                 "clarity_score": 65,
                 "policy_wording_review": "Explicit Mention",
                 "explanation": "Coverage appears applicable under storm damage provisions, subject to deductible requirements and specific policy conditions outlined in the schedule documentation.",
                 "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance.",
-                # "session_id": "123e4567-e89b-12d3-a456-426614174000",
-                # "timestamp": "2024-08-14T10:30:00Z",
-                # "processing_info": {
-                #     "policy_pages_extracted": 15,
-                #     "schedule_pages_extracted": 3,
-                #     "total_characters": 45000,
-                #     "question_length": 50
-                # }
+                "policy_notes": [
+                    "Policy includes storm damage coverage with a $500 deductible.",
+                    "Certain exclusions may apply as detailed in section 4.2 of the policy document."
+                ]
             }
         }
 
