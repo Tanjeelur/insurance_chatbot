@@ -112,7 +112,6 @@ class InsuranceAnalyzer:
                 temperature=self.settings.TEMPERATURE,
                 max_tokens=self.settings.MAX_TOKENS
             )
-            print("RAW MODEL RESPONSE:", response)
             result = response.choices[0].message.content.strip()
             
             # Parse JSON response
