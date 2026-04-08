@@ -1,124 +1,16 @@
-# from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
-# from typing import Dict
-# import uuid
-# from datetime import datetime
 
-# from app.schemas.coverage import CoverageResponse, HealthResponse
-# from app.services.pdf_extractor import PDFExtractor
-# from app.services.insurance_analyzer import InsuranceAnalyzer
-
-# router = APIRouter()
-
-# def get_pdf_extractor() -> PDFExtractor:
-#     """Dependency to get PDF extractor service"""
-#     return PDFExtractor()
-
-# def get_insurance_analyzer() -> InsuranceAnalyzer:
-#     """Dependency to get insurance analyzer service"""
-#     return InsuranceAnalyzer()
-
-# @router.post("/analyze-coverage", response_model=CoverageResponse)
-# async def analyze_coverage(
-#     policy_disclosure: UploadFile = File(..., description="Policy Disclosure Statement PDF"),
-#     schedule_coverage: UploadFile = File(..., description="Schedule of Coverage PDF"),
-#     insurance_type: str = Form(..., description="Type of insurance (e.g., auto, home, health, construction etc)"),
-#     question: str = Form(..., description="Your question about insurance coverage"),
-#     pdf_extractor: PDFExtractor = Depends(get_pdf_extractor),
-#     analyzer: InsuranceAnalyzer = Depends(get_insurance_analyzer)
-# ):
-#     """Upload insurance documents and get immediate coverage analysis for your question"""
-    
-#     # Validate file types
-#     allowed_types = ["application/pdf"]
-#     if policy_disclosure.content_type not in allowed_types:
-#         raise HTTPException(status_code=400, detail="Policy Disclosure must be a PDF file")
-#     if schedule_coverage.content_type not in allowed_types:
-#         raise HTTPException(status_code=400, detail="Schedule of Coverage must be a PDF file")
-    
-#     # Validate question
-#     if not question.strip():
-#         raise HTTPException(status_code=400, detail="Question cannot be empty")
-    
-    
-#     try:
-#         # Read PDF files
-#         policy_bytes = await policy_disclosure.read()
-#         schedule_bytes = await schedule_coverage.read()
-        
-#         # Extract text from both PDFs
-#         policy_text = pdf_extractor.extract_text(policy_bytes)
-#         schedule_text = pdf_extractor.extract_text(schedule_bytes)
-        
-#         # Combine the texts
-#         combined_text = f"""
-# === POLICY DISCLOSURE STATEMENT ===
-# {policy_text}
-
-# === SCHEDULE OF COVERAGE ===
-# {schedule_text}
-# """
-        
-#         # Analyze coverage immediately
-#         result = analyzer.analyze_coverage(combined_text, question, insurance_type)
-        
-#         # # Create session ID for tracking
-#         # session_id = str(uuid.uuid4())
-        
-#         # # Prepare processing info
-#         # processing_info = {
-#         #     "policy_pages_extracted": len(policy_text.split('\n\n')),
-#         #     "schedule_pages_extracted": len(schedule_text.split('\n\n')),
-#         #     "total_characters": len(combined_text),
-#         #     "question_length": len(question)
-#         # }
-        
-#         # Prepare response
-#         return CoverageResponse(
-#             percentage_score=result["percentage_score"],
-#             likelihood_ranking=result["likelihood_ranking"],
-#             explanation=result["explanation"],
-#             # session_id=session_id,
-#             # timestamp=datetime.now().isoformat(),
-#             # processing_info=processing_info
-#         )
-        
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
-
-# @router.get("/health", response_model=HealthResponse)
-# async def health_check():
-#     """Health check endpoint"""
-#     return HealthResponse(
-#         status="healthy",
-#         timestamp=datetime.now().isoformat(),
-#         model="Insurance Document Analyzer with Fine-tuned Instructions"
-#     )
-
-# @router.get("/")
-# async def root():
-#     """Root endpoint with API information"""
-#     return {
-#         "message": "Insurance Document Analyzer API - Modular Architecture",
-#         "version": "2.0.0",
-#         "description": "Upload PDS and Schedule PDFs with your coverage question to get immediate analysis",
-#         "main_endpoint": "/analyze-coverage",
-#         "features": [
-#             "Single API call for complete analysis",
-#             "Fine-tuned model with conservative assessment framework",
-#             "Structured 40-word explanations",
-#             "Percentage-based confidence scoring",
-#             "Professional insurance policy interpretation",
-#             "Modular FastAPI architecture"
-#         ]
-#     }
+import time
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
-from typing import Dict
+from typing import Dict, Optional
 import uuid
 from datetime import datetime
 
 from app.schemas.coverage import CoverageResponse, HealthResponse
 from app.services.pdf_extractor import PDFExtractor
 from app.services.insurance_analyzer import InsuranceAnalyzer
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     tags=["coverage"]
@@ -135,49 +27,66 @@ def get_insurance_analyzer() -> InsuranceAnalyzer:
 @router.post("/analyze-coverage", response_model=CoverageResponse)
 async def analyze_coverage(
     policy_disclosure: UploadFile = File(..., description="Policy Disclosure Statement PDF"),
-    schedule_coverage: UploadFile = File(..., description="Schedule of Coverage PDF"),
+    schedule_coverage: Optional[UploadFile] = File(None, description="Schedule of Coverage PDF (optional)"),
     insurance_type: str = Form(..., description="Type of insurance (e.g., auto, home, health, construction etc)"),
     question: str = Form(..., description="Your question about insurance coverage"),
     pdf_extractor: PDFExtractor = Depends(get_pdf_extractor),
     analyzer: InsuranceAnalyzer = Depends(get_insurance_analyzer)
 ):
     """Upload insurance documents and get immediate coverage analysis for your question"""
-    
+    start = time.perf_counter()
+    logger.info("── New analysis request ──────────────────────────────")
+    logger.info("  insurance_type : %s", insurance_type)
+    logger.info("  question       : %s", question[:120])
+    logger.info("  policy_disclosure : %s (%s)", policy_disclosure.filename, policy_disclosure.content_type)
+    logger.info("  schedule_coverage : %s", f"{schedule_coverage.filename} ({schedule_coverage.content_type})" if schedule_coverage else "not provided")
+
     # Validate file types
     allowed_types = ["application/pdf"]
     if policy_disclosure.content_type not in allowed_types:
+        logger.warning("Validation failed: policy_disclosure is not a PDF (%s)", policy_disclosure.content_type)
         raise HTTPException(status_code=400, detail="Policy Disclosure must be a PDF file")
-    if schedule_coverage.content_type not in allowed_types:
+    if schedule_coverage is not None and schedule_coverage.content_type not in allowed_types:
+        logger.warning("Validation failed: schedule_coverage is not a PDF (%s)", schedule_coverage.content_type)
         raise HTTPException(status_code=400, detail="Schedule of Coverage must be a PDF file")
-    
+
     # Validate question
     if not question.strip():
+        logger.warning("Validation failed: empty question")
         raise HTTPException(status_code=400, detail="Question cannot be empty")
-    
-    
-    try:
-        # Read PDF files
-        policy_bytes = await policy_disclosure.read()
-        schedule_bytes = await schedule_coverage.read()
-        
-        # Extract text from both PDFs
-        policy_text = pdf_extractor.extract_text(policy_bytes)
-        schedule_text = pdf_extractor.extract_text(schedule_bytes)
-        
-        # Combine the texts
-        combined_text = f"""
-                            === POLICY DISCLOSURE STATEMENT ===
-                            {policy_text}
 
-                            === SCHEDULE OF COVERAGE ===
-                            {schedule_text}
-                            """
-        
-        # Analyze coverage immediately
+    logger.info("  [1/4] Validation passed")
+
+    try:
+        # Read & extract policy disclosure
+        logger.info("  [2/4] Extracting text from PDFs ...")
+        policy_bytes = await policy_disclosure.read()
+        policy_text = pdf_extractor.extract_text(policy_bytes)
+        logger.info("        policy_disclosure → %d chars extracted", len(policy_text))
+
+        schedule_section = ""
+        if schedule_coverage is not None:
+            schedule_bytes = await schedule_coverage.read()
+            schedule_text = pdf_extractor.extract_text(schedule_bytes)
+            schedule_section = f"\n\n=== SCHEDULE OF COVERAGE ===\n{schedule_text}"
+            logger.info("        schedule_coverage  → %d chars extracted", len(schedule_text))
+        else:
+            logger.info("        schedule_coverage  → skipped (not provided)")
+
+        combined_text = f"=== POLICY DISCLOSURE STATEMENT ===\n{policy_text}{schedule_section}"
+        logger.info("        combined text      → %d chars total", len(combined_text))
+
+        # AI analysis
+        logger.info("  [3/4] Sending to OpenAI (%s) ...", analyzer.settings.OPENAI_MODEL)
+        ai_start = time.perf_counter()
         result = analyzer.analyze_coverage(combined_text, question, insurance_type)
-        
-        # Prepare response - Updated field names to match InsuranceAnalyzer output
-        return CoverageResponse(
+        ai_elapsed = (time.perf_counter() - ai_start) * 1000
+        logger.info("        OpenAI responded in %.0fms", ai_elapsed)
+        logger.info("        clarity_score=%s  wording_review=%s", result["clarity_score"], result["policy_wording_review"])
+
+        # Build response
+        logger.info("  [4/4] Building response ...")
+        response = CoverageResponse(
             policy_name=result["policy_name"],
             policy_price=str(result["policy_price"]),
             policy_renewal_date=result["policy_renewal_date"],
@@ -187,7 +96,15 @@ async def analyze_coverage(
             disclaimer=result["disclaimer"],
             policy_notes=result["policy_notes"]
         )
-        
+
+        total_elapsed = (time.perf_counter() - start) * 1000
+        logger.info("  ✓ Request complete in %.0fms", total_elapsed)
+        logger.info("─" * 54)
+        return response
+
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error("  ✗ Unhandled error: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 

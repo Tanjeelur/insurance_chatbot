@@ -3,6 +3,10 @@ import re
 import json
 from openai import OpenAI
 from app.core.config import get_settings
+from app.core.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class InsuranceAnalyzer:
     """Service for analyzing insurance coverage based on policy documents"""
@@ -54,9 +58,14 @@ class InsuranceAnalyzer:
         
         # policy notes field validation
         policy_notes = result.get("policy_notes", [])
-        policy_name = result.get("policy_name", "N/A")
-        policy_price = result.get("policy_price", "N/A")
-        policy_renewal_date = result.get("policy_renewal_date", "N/A")
+        policy_name = result.get("policy_name") or "N/A"
+        policy_renewal_date = result.get("policy_renewal_date") or "N/A"
+
+        raw_price = result.get("policy_price")
+        if not raw_price or str(raw_price).strip().lower() in ("none", "n/a", "null", "", "not available"):
+            policy_price = "Not stated in provided documents"
+        else:
+            policy_price = str(raw_price).strip()
 
         
         # Map percentage to correct policy_wording_review
@@ -66,18 +75,11 @@ class InsuranceAnalyzer:
                 policy_wording_review = ranking
                 break
         
-        # Ensure explanation is exactly 40 words - check both old and new field names
+        # Ensure explanation is within 40 words - truncate if over, accept if under
         explanation = result.get("explanation") or "Coverage assessment unavailable due to insufficient information in provided documentation."
         words = explanation.split()
-        if len(words) != 40:
-            if len(words) > 40:
-                explanation = " ".join(words[:40])
-            else:
-                # Pad with additional context if too short
-                padding_words = ["based", "on", "policy", "terms", "and", "conditions", "provided", "in", "documentation"]
-                while len(words) < 40 and padding_words:
-                    words.append(padding_words.pop(0))
-                explanation = " ".join(words[:40])
+        if len(words) > 40:
+            explanation = " ".join(words[:40])
         
         # Add the mandatory disclaimer
         disclaimer = "This interpretation is document-based only, not advice. Seek independent financial or legal guidance."
@@ -95,12 +97,13 @@ class InsuranceAnalyzer:
 
     def analyze_coverage(self, pdf_content: str, question: str, insurance_type: str) -> dict:
         """Analyze insurance coverage based on PDF content and user question"""
-        
-        # Structure the content
+
+        logger.info("Analyzer: cleaning and structuring text (%d chars)", len(pdf_content))
         structured_content = self.clean_and_structure_text(pdf_content)
-        
-        # Create the enhanced prompt based on model instructions
+        logger.info("Analyzer: structured text ready (%d chars)", len(structured_content))
+
         prompt = self._create_analysis_prompt(structured_content, question, insurance_type)
+        logger.info("Analyzer: prompt built (%d chars) — calling %s", len(prompt), self.settings.OPENAI_MODEL)
 
         try:
             response = self.client.chat.completions.create(
@@ -112,24 +115,38 @@ class InsuranceAnalyzer:
                 temperature=self.settings.TEMPERATURE,
                 max_tokens=self.settings.MAX_TOKENS
             )
-            result = response.choices[0].message.content.strip()
-            
+            raw = response.choices[0].message.content.strip()
+            usage = response.usage
+            logger.info(
+                "Analyzer: OpenAI response received — tokens: prompt=%s completion=%s total=%s",
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            )
+
             # Parse JSON response
             try:
-                parsed_result = json.loads(result)
+                parsed_result = json.loads(raw)
+                logger.info("Analyzer: JSON parsed successfully")
             except json.JSONDecodeError:
-                json_match = re.search(r'\{.*\}', result, re.DOTALL)
+                logger.warning("Analyzer: direct JSON parse failed, attempting regex extraction")
+                json_match = re.search(r'\{.*\}', raw, re.DOTALL)
                 if json_match:
                     parsed_result = json.loads(json_match.group())
+                    logger.info("Analyzer: JSON extracted via regex")
                 else:
+                    logger.error("Analyzer: could not parse JSON from response, using fallback")
                     parsed_result = self._get_fallback_response()
-            
-            # Validate and format response according to model instructions
+
             validated_result = self.validate_response_format(parsed_result)
+            logger.info(
+                "Analyzer: validation complete — score=%s  review=%s  notes=%d",
+                validated_result["clarity_score"],
+                validated_result["policy_wording_review"],
+                len(validated_result["policy_notes"])
+            )
             return validated_result
-                    
+
         except Exception as e:
-            # Fallback response for any errors
+            logger.error("Analyzer: unexpected error — %s", str(e), exc_info=True)
             return self._get_error_fallback_response()
 
     def _create_analysis_prompt(self, structured_content: str, question: str, insurance_type: str) -> str:
@@ -163,13 +180,17 @@ Only exceed 65% when documentation clearly supports coverage without major conti
 
 RESPONSE FORMAT (JSON):
 {{
-    "policy_name": "[Policy Name]",
-    "policy_price": [Policy Price],
-    "policy_renewal_date": "[Policy Renewal Date]",
+    "policy_name": "[Policy Name extracted from document, or 'N/A' if not found]",
+    "policy_price": "[Premium amount extracted from document. If premium/price is not stated in the provided documents, return exactly: 'Not stated in provided documents']",
+    "policy_renewal_date": "[Policy Renewal Date extracted from Schedule, or 'N/A' if not found]",
     "clarity_score": [integer 0-100],
     "policy_wording_review": "[No Mention/Little Mention/Explicit Mention/Highly Explicit Mention]",
-    "explanation": "[EXACTLY 40 words explaining the assessment, referencing relevant PDS/Schedule terms. Include third-party liability flags if applicable and listed event examples if relevant.]"
-    "policy_notes": "[ up to 3 bullet points  highlighting useful or unusual policy elements, such as unusually high excesses, broader or narrower exclusions, or notable differences from typical category standards. Notes remain objective, factual, and non-directive.]"
+    "explanation": "[EXACTLY 40 words explaining the assessment, referencing relevant PDS/Schedule terms. Include third-party liability flags if applicable and listed event examples if relevant.]",
+    "policy_notes": [
+        "[Note 1: Must include a SPECIFIC value, amount, limit, or named exclusion extracted directly from the document. E.g. 'Flood damage excess is $2,500 per claim' or 'Storm event payout capped at $20,000'. Generic statements without document-sourced figures are NOT acceptable.]",
+        "[Note 2: Another specific finding — e.g. a named exclusion, a sub-limit, or a condition that narrows or broadens typical coverage. Quote exact policy wording where possible.]",
+        "[Note 3: A third notable detail — e.g. a coverage gap, an unusual clause, or a dollar/percentage figure that materially affects the user's question. Omit this note if no third substantive detail exists.]"
+    ]
 }}
 
 IMPORTANT:
@@ -178,6 +199,10 @@ IMPORTANT:
 - Avoid speculation or overconfidence
 - Provide conservative assessments with disclaimers for ambiguity
 - Focus on policy interpretation, not legal advice
+- policy_notes MUST contain specific figures, dollar amounts, named exclusions, or quoted policy wording extracted from the document. Vague notes like "exclusions may apply" or "excess applies to certain claims" are UNACCEPTABLE — always state the actual value or named condition found in the document.
+- If the document contains coverage limits, excess amounts, sub-limits, or explicit exclusions relevant to the question, these MUST appear in policy_notes.
+- If the policy is a Strata, Body Corporate, or Owners Corporation policy: explicitly clarify in the explanation or policy_notes that this policy covers the shared building structure and common property — NOT individual lot owners' internal unit contents or personal belongings, unless a Lot Owners Fixtures and Improvements section is present and applicable.
+- Only include policy_notes that are directly relevant to the user's question. Do not include sections (e.g. liability limits) that are unrelated to what the user asked.
 
 Respond with valid JSON only.
 """
