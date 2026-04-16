@@ -1,9 +1,21 @@
-from typing import Dict
+from typing import List, Literal
 import re
-import json
 from openai import OpenAI
+from pydantic import BaseModel, Field
 from app.core.config import get_settings
 from app.core.logger import get_logger
+
+
+class CoverageAnalysisOutput(BaseModel):
+    policy_name: str
+    policy_price: str
+    policy_renewal_date: str
+    clarity_score: int = Field(ge=0, le=100)
+    policy_wording_review: Literal[
+        "No Mention", "Little Mention", "Explicit Mention", "Highly Explicit Mention"
+    ]
+    explanation: str
+    policy_notes: List[str]
 
 logger = get_logger(__name__)
 
@@ -106,37 +118,23 @@ class InsuranceAnalyzer:
         logger.info("Analyzer: prompt built (%d chars) — calling %s", len(prompt), self.settings.OPENAI_MODEL)
 
         try:
-            response = self.client.chat.completions.create(
+            response = self.client.responses.parse(
                 model=self.settings.OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are an expert insurance policy analyzer. Always respond with valid JSON following the specified format exactly. Be highly conservative in your assessments and ensure explanations are exactly 40 words."},
+                input=[
+                    {"role": "system", "content": "You are an expert insurance policy analyzer. Be highly conservative in your assessments and ensure explanations are exactly 40 words."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=self.settings.TEMPERATURE,
-                max_tokens=self.settings.MAX_TOKENS
+                text_format=CoverageAnalysisOutput,
             )
-            raw = response.choices[0].message.content.strip()
-            usage = response.usage
-            logger.info(
-                "Analyzer: OpenAI response received — tokens: prompt=%s completion=%s total=%s",
-                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-            )
+            logger.info("Analyzer: OpenAI response received")
 
-            # Parse JSON response
-            try:
-                parsed_result = json.loads(raw)
-                logger.info("Analyzer: JSON parsed successfully")
-            except json.JSONDecodeError:
-                logger.warning("Analyzer: direct JSON parse failed, attempting regex extraction")
-                json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-                if json_match:
-                    parsed_result = json.loads(json_match.group())
-                    logger.info("Analyzer: JSON extracted via regex")
-                else:
-                    logger.error("Analyzer: could not parse JSON from response, using fallback")
-                    parsed_result = self._get_fallback_response()
+            parsed_result = response.output_parsed
+            if parsed_result is None:
+                logger.error("Analyzer: structured output is None (refusal or parse failure), using fallback")
+                return self._get_fallback_response()
 
-            validated_result = self.validate_response_format(parsed_result)
+            logger.info("Analyzer: structured output parsed successfully")
+            validated_result = self.validate_response_format(parsed_result.model_dump())
             logger.info(
                 "Analyzer: validation complete — score=%s  review=%s  notes=%d",
                 validated_result["clarity_score"],

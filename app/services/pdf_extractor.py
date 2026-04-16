@@ -20,8 +20,9 @@ class PDFExtractor:
             text = ""
             for page in doc:
                 text += page.get_text("text") + "\n\n"
+            page_count = doc.page_count
             doc.close()
-            logger.debug("PDFExtractor: PyMuPDF extracted %d pages, %d chars", doc.page_count, len(text))
+            logger.debug("PDFExtractor: PyMuPDF extracted %d pages, %d chars", page_count, len(text))
             return text.strip()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error extracting text with PyMuPDF: {str(e)}")
@@ -34,7 +35,7 @@ class PDFExtractor:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
             text = ""
             for page in pdf_reader.pages:
-                text += page.extract_text() + "\n\n"
+                text += (page.extract_text() or "") + "\n\n"
             logger.debug("PDFExtractor: PyPDF2 extracted %d pages, %d chars", len(pdf_reader.pages), len(text))
             return text.strip()
         except Exception as e:
@@ -53,5 +54,6 @@ class PDFExtractor:
             logger.warning("PDFExtractor: PyMuPDF failed, falling back to PyPDF2")
 
         text = cls.extract_text_pypdf2(pdf_bytes)
+        
         logger.info("PDFExtractor: used PyPDF2 → %d chars", len(text))
         return text

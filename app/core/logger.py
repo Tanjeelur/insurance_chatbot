@@ -39,9 +39,9 @@ def setup_logger() -> None:
     root.addHandler(file_handler)
 
     # Silence noisy third-party loggers
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.WARNING)
+    # logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # logging.getLogger("httpx").setLevel(logging.WARNING)
+    # logging.getLogger("openai").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:
