@@ -121,7 +121,7 @@ class InsuranceAnalyzer:
             response = self.client.responses.parse(
                 model=self.settings.OPENAI_MODEL,
                 input=[
-                    {"role": "system", "content": "You are an expert insurance policy analyzer. Be highly conservative in your assessments and ensure explanations are exactly 40 words."},
+                    {"role": "system", "content": "You are an expert insurance policy analyzer. Be highly conservative in your assessments. The explanation must give a definitive verdict (covered / not covered / partially covered) with the specific policy reason — never tell the user to 'check' something themselves. Ensure explanations are exactly 40 words."},
                     {"role": "user", "content": prompt}
                 ],
                 text_format=CoverageAnalysisOutput,
@@ -183,11 +183,11 @@ RESPONSE FORMAT (JSON):
     "policy_renewal_date": "[Policy Renewal Date extracted from Schedule, or 'N/A' if not found]",
     "clarity_score": [integer 0-100],
     "policy_wording_review": "[No Mention/Little Mention/Explicit Mention/Highly Explicit Mention]",
-    "explanation": "[EXACTLY 40 words explaining the assessment, referencing relevant PDS/Schedule terms. Include third-party liability flags if applicable and listed event examples if relevant.]",
+    "explanation": "[EXACTLY 40 words giving a definitive verdict. State clearly whether the policy DOES or DOES NOT cover the claim, and WHY — referencing the specific clause, exclusion, or section wording from the document. Do NOT say 'must be checked' or defer the answer — give it directly and conservatively.]",
     "policy_notes": [
-        "[Note 1: Must include a SPECIFIC value, amount, limit, or named exclusion extracted directly from the document. E.g. 'Flood damage excess is $2,500 per claim' or 'Storm event payout capped at $20,000'. Generic statements without document-sourced figures are NOT acceptable.]",
-        "[Note 2: Another specific finding — e.g. a named exclusion, a sub-limit, or a condition that narrows or broadens typical coverage. Quote exact policy wording where possible.]",
-        "[Note 3: A third notable detail — e.g. a coverage gap, an unusual clause, or a dollar/percentage figure that materially affects the user's question. Omit this note if no third substantive detail exists.]"
+        "[Note 1: An additional insight about this policy that is NOT directly about the user's question. Examples: 'Your vehicle is covered up to a market value cap of $15,000', 'Drivers under 25 incur an additional excess of $X per at-fault claim', 'Your policy renews in approximately N weeks on [date]'. Must be a specific, document-sourced fact.]",
+        "[Note 2: Another notable policy detail unrelated to the user's specific question — e.g. a coverage cap, age-based condition, named exclusion, or sub-limit that materially affects the customer's overall coverage picture.]",
+        "[Note 3: A third insight if available — e.g. a condition that could affect future claims, a coverage gap the customer should be aware of, or any other document-sourced fact that adds value beyond the question. Omit if no third substantive detail exists.]"
     ]
 }}
 
@@ -197,10 +197,10 @@ IMPORTANT:
 - Avoid speculation or overconfidence
 - Provide conservative assessments with disclaimers for ambiguity
 - Focus on policy interpretation, not legal advice
-- policy_notes MUST contain specific figures, dollar amounts, named exclusions, or quoted policy wording extracted from the document. Vague notes like "exclusions may apply" or "excess applies to certain claims" are UNACCEPTABLE — always state the actual value or named condition found in the document.
-- If the document contains coverage limits, excess amounts, sub-limits, or explicit exclusions relevant to the question, these MUST appear in policy_notes.
+- policy_notes MUST contain insights that go BEYOND the user's specific question — these are additional facts about the policy that the customer should know but didn't ask about. They should feel like a knowledgeable broker sharing extra context.
+- policy_notes must NOT repeat or summarise what is already stated in the explanation.
+- Each note must still be document-sourced and specific (dollar amounts, named conditions, dates, percentages — not vague generalisations). Vague notes like "exclusions may apply" or "excess applies to certain claims" are UNACCEPTABLE.
 - If the policy is a Strata, Body Corporate, or Owners Corporation policy: explicitly clarify in the explanation or policy_notes that this policy covers the shared building structure and common property — NOT individual lot owners' internal unit contents or personal belongings, unless a Lot Owners Fixtures and Improvements section is present and applicable.
-- Only include policy_notes that are directly relevant to the user's question. Do not include sections (e.g. liability limits) that are unrelated to what the user asked.
 
 Respond with valid JSON only.
 """
