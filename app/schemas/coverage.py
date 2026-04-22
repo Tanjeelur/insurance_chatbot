@@ -1,12 +1,10 @@
-
-
 from pydantic import BaseModel
-from typing import Dict
-from datetime import datetime
+from typing import List
+
 
 class CoverageRequest(BaseModel):
     question: str
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -14,32 +12,49 @@ class CoverageRequest(BaseModel):
             }
         }
 
+
 class CoverageResponse(BaseModel):
     policy_name: str = "N/A"
-    policy_price: str = "N/A"
-    policy_renewal_date: str = "N/A"
-    clarity_score: int
-    policy_wording_review: str
-    explanation: str
-    disclaimer: str
-    policy_notes: list
-    
+    user_question: str
+    direct_answer: str          # NEW: one-line verdict returned first
+    explanation: List[str]
+    explanation_summary: str
+    policy_notes: List[str]
+    policy_price: str
+    final_summary: str
+
     class Config:
         json_schema_extra = {
             "example": {
-                "policy_name": "Comprehensive Home Insurance",
-                "policy_price": "1200.00",
-                "policy_renewal_date": "2024-12-01T00:00:00Z",
-                "clarity_score": 65,
-                "policy_wording_review": "Explicit Mention",
-                "explanation": "Coverage appears applicable under storm damage provisions, subject to deductible requirements and specific policy conditions outlined in the schedule documentation.",
-                "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance.",
+                "policy_name": "CGU Steadfast Home Insurance (Listed Events Cover)",
+                "user_question": "Am I covered for water coming through my walls?",
+                "direct_answer": "Conditional — depends on whether entry was caused by an insured event.",
+                "explanation": [
+                    "Storm, Flood, Rainwater, Wind covers water damage caused directly by storm or rainwater.",
+                    "Storm, Flood, Rainwater, Wind excludes ingress caused by structural defects, faulty design, or workmanship.",
+                    "Escape of Liquid covers sudden escape from pipes or fixtures but excludes gradual seepage.",
+                    "Listed Events Cover means damage is only covered where linked to a named insured event.",
+                ],
+                "explanation_summary": (
+                    "Coverage depends on whether water entry was caused by a listed insured event "
+                    "or by a structural or gradual cause."
+                ),
                 "policy_notes": [
-                    "Policy includes storm damage coverage with a $500 deductible.",
-                    "Certain exclusions may apply as detailed in section 4.2 of the policy document."
-                ]
+                    "Water damage exclusion — structural ingress not covered (Storm, Flood, Rainwater, Wind)",
+                    "Structural defect exclusion — faulty design/workmanship excluded (Storm, Flood, Rainwater, Wind)",
+                    "Gradual damage exclusion — seepage and non-sudden damage excluded (Escape of Liquid)",
+                    "Source repair exclusion — defective pipe or fitting not covered (Escape of Liquid)",
+                    "Listed events limitation — only named events trigger cover (Listed Events Cover)",
+                    "Excess payable — deducted per claim (Excess / Paying Claims)",
+                ],
+                "policy_price": "Not listed in provided documents",
+                "final_summary": (
+                    "Coverage is determined by the Storm, Flood, Rainwater, Wind and Escape of Liquid "
+                    "clauses within a Listed Events Cover structure."
+                ),
             }
         }
+
 
 class HealthResponse(BaseModel):
     status: str

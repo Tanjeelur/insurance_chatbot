@@ -1,232 +1,267 @@
-from typing import List, Literal
+from typing import List, Optional
 import re
 from openai import OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from app.core.config import get_settings
 from app.core.logger import get_logger
 
-
-class CoverageAnalysisOutput(BaseModel):
-    policy_name: str
-    policy_price: str
-    policy_renewal_date: str
-    clarity_score: int = Field(ge=0, le=100)
-    policy_wording_review: Literal[
-        "No Mention", "Little Mention", "Explicit Mention", "Highly Explicit Mention"
-    ]
-    explanation: str
-    policy_notes: List[str]
-
 logger = get_logger(__name__)
 
+# ── Constants ──────────────────────────────────────────────────────────────────
+MAX_CONTENT_CHARS = 80_000   # ~20k tokens — safe ceiling for gpt-4o-mini
+EXPLANATION_MIN = 3
+EXPLANATION_MAX = 6
+POLICY_NOTES_MIN = 6
+POLICY_NOTES_MAX = 12
 
+
+# ── Structured output schema ───────────────────────────────────────────────────
+class CoverageAnalysisOutput(BaseModel):
+    policy_name: str
+    user_question: str
+    direct_answer: str          # NEW: one-line verdict (Covered / Not Covered / Conditional)
+    explanation: List[str]
+    explanation_summary: str
+    policy_notes: List[str]
+    policy_price: str
+    final_summary: str
+
+
+# ── Main service ───────────────────────────────────────────────────────────────
 class InsuranceAnalyzer:
-    """Service for analyzing insurance coverage based on policy documents"""
-    
+    """Service for analysing insurance coverage based on policy documents."""
+
     def __init__(self):
         self.settings = get_settings()
         self.client = OpenAI(api_key=self.settings.OPENAI_API_KEY)
-        self.likelihood_ranges = {
-            "No Mention": (0, 20),
-            "Little Mention": (21, 50),
-            "Explicit Mention": (51, 65),
-            "Highly Explicit Mention": (66, 100)
-            
-        }
-    
-    def clean_and_structure_text(self, text: str) -> str:
-        """Clean and structure the extracted text for better processing"""
-        # Remove excessive whitespace
-        text = re.sub(r'\n\s*\n', '\n\n', text)
-        text = re.sub(r' +', ' ', text)
-        
-        # Identify and preserve important sections
-        sections = [
-            "policy summary", "coverage", "exclusions", "deductible", 
-            "limits", "conditions", "definitions", "schedule", "listed events"
-        ]
-        
-        lines = text.split('\n')
-        structured_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if line:
-                # Check if line might be a section header
-                if any(section in line.lower() for section in sections):
-                    structured_lines.append(f"\n=== {line} ===")
-                else:
-                    structured_lines.append(line)
-        
-        return '\n'.join(structured_lines)
-    
-    def validate_response_format(self, result: dict) -> dict:
-        """Validate and correct the response format according to the model instructions"""
-        
-        # Ensure clarity_score is within valid range
-        clarity_score = result.get("clarity_score", 50)
-        if not isinstance(clarity_score, int) or clarity_score < 0 or clarity_score > 100:
-            clarity_score = 50
-        
-        # policy notes field validation
-        policy_notes = result.get("policy_notes", [])
-        policy_name = result.get("policy_name") or "N/A"
-        policy_renewal_date = result.get("policy_renewal_date") or "N/A"
 
+    # ── Text helpers ───────────────────────────────────────────────────────────
+
+    def clean_text(self, text: str) -> str:
+        """
+        Lightly clean extracted PDF text without corrupting structure.
+        Avoids wrapping mid-sentence words in === headers (previous bug).
+        """
+        # Collapse excessive blank lines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        # Collapse multiple spaces
+        text = re.sub(r' {2,}', ' ', text)
+        # Strip trailing whitespace per line
+        text = '\n'.join(line.rstrip() for line in text.splitlines())
+        return text.strip()
+
+    def truncate_content(self, text: str) -> str:
+        """
+        Hard-cap content to MAX_CONTENT_CHARS to avoid context overflow.
+        Logs a warning if truncation occurs.
+        """
+        if len(text) > MAX_CONTENT_CHARS:
+            logger.warning(
+                "Content truncated from %d to %d chars to stay within context limit",
+                len(text), MAX_CONTENT_CHARS
+            )
+            return text[:MAX_CONTENT_CHARS] + "\n\n[NOTE: Document truncated due to length]"
+        return text
+
+    def _normalize_list(self, value) -> List[str]:
+        """Normalise model output into a clean list of non-empty single-line strings."""
+        if isinstance(value, str):
+            items = [line.strip(" -•\t") for line in value.splitlines() if line.strip()]
+        elif isinstance(value, list):
+            items = [str(item).strip() for item in value if str(item).strip()]
+        else:
+            return []
+
+        cleaned = []
+        for item in items:
+            single_line = re.sub(r"\s+", " ", item).strip()
+            if single_line:
+                cleaned.append(single_line)
+        return cleaned
+
+    # ── Validation ─────────────────────────────────────────────────────────────
+
+    def validate_response(self, result: dict, question: str, insurance_type: str) -> dict:
+        """
+        Validate and repair model output.
+        Fixes: None values, empty fields, broken force-prefixes (removed).
+        """
+        policy_name = str(result.get("policy_name") or "N/A").strip() or "N/A"
+        user_question = str(result.get("user_question") or question).strip() or question
+
+        # Direct answer — new field
+        direct_answer = str(result.get("direct_answer") or "").strip()
+        if not direct_answer:
+            direct_answer = "Unable to determine — manual policy review required."
+
+        # Explanation points
+        explanation = self._normalize_list(result.get("explanation"))
+        explanation = explanation[:EXPLANATION_MAX]
+        while len(explanation) < EXPLANATION_MIN:
+            explanation.append(
+                "Coverage outcome depends on the documented cause of loss and applicable exclusions."
+            )
+
+        # Explanation summary — do NOT force-prefix; trust the model
+        explanation_summary = str(result.get("explanation_summary") or "").strip()
+        if not explanation_summary:
+            explanation_summary = (
+                "Coverage depends on the proven cause of loss under the relevant "
+                "insured-event and exclusion clauses."
+            )
+
+        # Policy notes
+        policy_notes = self._normalize_list(result.get("policy_notes"))
+        policy_notes = policy_notes[:POLICY_NOTES_MAX]
+
+        # Policy price — from document only
         raw_price = result.get("policy_price")
         if not raw_price or str(raw_price).strip().lower() in ("none", "n/a", "null", "", "not available"):
-            policy_price = "Not stated in provided documents"
+            policy_price = "Not listed in provided documents"
         else:
             policy_price = str(raw_price).strip()
 
-        
-        # Map percentage to correct policy_wording_review
-        policy_wording_review = "Little Mention"  # default
-        for ranking, (min_val, max_val) in self.likelihood_ranges.items():
-            if min_val <= clarity_score <= max_val:
-                policy_wording_review = ranking
-                break
-        
-        # Ensure explanation is within 40 words - truncate if over, accept if under
-        explanation = result.get("explanation") or "Coverage assessment unavailable due to insufficient information in provided documentation."
-        words = explanation.split()
-        if len(words) > 40:
-            explanation = " ".join(words[:40])
-        
-        # Add the mandatory disclaimer
-        disclaimer = "This interpretation is document-based only, not advice. Seek independent financial or legal guidance."
-        
+        # Final summary — do NOT force-prefix; trust the model
+        final_summary = str(result.get("final_summary") or "").strip()
+        if not final_summary:
+            final_summary = (
+                "Coverage is determined by the policy's insuring clauses, "
+                "exclusions, and conditions."
+            )
+
         return {
             "policy_name": policy_name,
-            "policy_price": policy_price,
-            "policy_renewal_date": policy_renewal_date,
-            "clarity_score": clarity_score,
-            "policy_wording_review": policy_wording_review,
+            "user_question": user_question,
+            "direct_answer": direct_answer,
             "explanation": explanation,
-            "disclaimer": disclaimer,
-            "policy_notes": policy_notes
+            "explanation_summary": explanation_summary,
+            "policy_notes": policy_notes,
+            "policy_price": policy_price,
+            "final_summary": final_summary,
         }
 
-    def analyze_coverage(self, pdf_content: str, question: str, insurance_type: str) -> dict:
-        """Analyze insurance coverage based on PDF content and user question"""
+    # ── Prompt ─────────────────────────────────────────────────────────────────
 
-        logger.info("Analyzer: cleaning and structuring text (%d chars)", len(pdf_content))
-        structured_content = self.clean_and_structure_text(pdf_content)
-        logger.info("Analyzer: structured text ready (%d chars)", len(structured_content))
+    def _build_system_prompt(self) -> str:
+        return """You are an insurance policy analysis assistant for Covermate.
 
-        prompt = self._create_analysis_prompt(structured_content, question, insurance_type)
-        logger.info("Analyzer: prompt built (%d chars) — calling %s", len(prompt), self.settings.OPENAI_MODEL)
+ROLE:
+- Analyse policy documents and return a structured, factual report based ONLY on provided policy data.
+- Do NOT provide advice, recommendations, or opinions.
+- Do NOT hallucinate clause names — use only clause names present in the document.
+- Do NOT infer beyond the wording present in the documents.
+- Use plain, direct language.
 
-        try:
-            response = self.client.responses.parse(
-                model=self.settings.OPENAI_MODEL,
-                input=[
-                    {"role": "system", "content": "You are an expert insurance policy analyzer. Be highly conservative in your assessments. The explanation must give a definitive verdict (covered / not covered / partially covered) with the specific policy reason — never tell the user to 'check' something themselves. Ensure explanations are exactly 40 words."},
-                    {"role": "user", "content": prompt}
-                ],
-                text_format=CoverageAnalysisOutput,
-            )
-            logger.info("Analyzer: OpenAI response received")
+STYLE RULES:
+- Never use: "you should", "we recommend", "consider", or any advisory language.
+- Clearly separate what triggers cover from what excludes it.
+- Be concise and non-repetitive.
+- If the policy is silent on the question, state that explicitly."""
 
-            parsed_result = response.output_parsed
-            if parsed_result is None:
-                logger.error("Analyzer: structured output is None (refusal or parse failure), using fallback")
-                return self._get_fallback_response()
-
-            logger.info("Analyzer: structured output parsed successfully")
-            validated_result = self.validate_response_format(parsed_result.model_dump())
-            logger.info(
-                "Analyzer: validation complete — score=%s  review=%s  notes=%d",
-                validated_result["clarity_score"],
-                validated_result["policy_wording_review"],
-                len(validated_result["policy_notes"])
-            )
-            return validated_result
-
-        except Exception as e:
-            logger.error("Analyzer: unexpected error — %s", str(e), exc_info=True)
-            return self._get_error_fallback_response()
-
-    def _create_analysis_prompt(self, structured_content: str, question: str, insurance_type: str) -> str:
-        """Create the analysis prompt for OpenAI"""
-        return f"""
-You are an expert insurance policy analyzer specializing in Product Disclosure Statements (PDS) and Schedules of Coverage. You must conduct a meticulous and conservative analysis of the {insurance_type} insurance documentation to answer the user's coverage question.
-
-INSURANCE DOCUMENTS:
+    def _build_user_prompt(self, structured_content: str, question: str, insurance_type: str) -> str:
+        return f"""INSURANCE DOCUMENTS:
 {structured_content}
 
 USER QUESTION: {question}
 
 INSURANCE TYPE: {insurance_type.title()} Insurance
 
-ANALYSIS REQUIREMENTS:
-1. Conduct a deep, comprehensive review of ALL relevant clauses, definitions, exclusions, and conditions specific to {insurance_type} insurance
-2. Ensure strict alignment between the user's question and relevant policy terms
-3. Avoid conflation of unrelated coverage areas
-4. Search thoroughly for dependencies, gaps, or ambiguities
-5. If multiple parties may be responsible (builders, subcontractors, engineers), flag this complexity
-6. Use highly cautious framework for confidence scoring
-7. If mentioning 'listed events', include at least one concrete example from the policy
+Return a JSON object matching this exact schema:
 
-CONSERVATIVE FRAMEWORK FOR CLARITY SCORE:
-- "No Mention": 0–20%
-- "Little Mention": 21–50%
-- "Explicit Mention": 51–65%
-- "Highly Explicit Mention": 66–100%
-
-Only exceed 65% when documentation clearly supports coverage without major contingencies. If coverage depends on specific perils, conditional clauses, or unknown circumstances, assign mid-range or lower percentage.
-
-RESPONSE FORMAT (JSON):
 {{
-    "policy_name": "[Policy Name extracted from document, or 'N/A' if not found]",
-    "policy_price": "[Premium amount extracted from document. If premium/price is not stated in the provided documents, return exactly: 'Not stated in provided documents']",
-    "policy_renewal_date": "[Policy Renewal Date extracted from Schedule, or 'N/A' if not found]",
-    "clarity_score": [integer 0-100],
-    "policy_wording_review": "[No Mention/Little Mention/Explicit Mention/Highly Explicit Mention]",
-    "explanation": "[EXACTLY 40 words giving a definitive verdict. State clearly whether the policy DOES or DOES NOT cover the claim, and WHY — referencing the specific clause, exclusion, or section wording from the document. Do NOT say 'must be checked' or defer the answer — give it directly and conservatively.]",
+    "policy_name": "Extract exact policy name from document. Use N/A if not found.",
+    "user_question": "Repeat the user question verbatim.",
+    "direct_answer": "One-line verdict: 'Covered', 'Not Covered', or 'Conditional — [key condition]'.",
+    "explanation": [
+        "3 to 6 bullet points. Reference specific clause names from the document only.",
+        "Each point explains what triggers cover OR what excludes it.",
+        "No advice, no speculation, no invented clauses."
+    ],
+    "explanation_summary": "One sentence: what the coverage outcome depends on.",
     "policy_notes": [
-        "[Note 1: An additional insight about this policy that is NOT directly about the user's question. Examples: 'Your vehicle is covered up to a market value cap of $15,000', 'Drivers under 25 incur an additional excess of $X per at-fault claim', 'Your policy renews in approximately N weeks on [date]'. Must be a specific, document-sourced fact.]",
-        "[Note 2: Another notable policy detail unrelated to the user's specific question — e.g. a coverage cap, age-based condition, named exclusion, or sub-limit that materially affects the customer's overall coverage picture.]",
-        "[Note 3: A third insight if available — e.g. a condition that could affect future claims, a coverage gap the customer should be aware of, or any other document-sourced fact that adds value beyond the question. Omit if no third substantive detail exists.]"
-    ]
+        "6 to 12 one-line notes. Format each as: <Issue> — <what it means> (<Clause Name>)",
+        "Flag: exclusions, limits, claim constraints, structural gaps.",
+        "Do not repeat explanation points. Do not give advice."
+    ],
+    "policy_price": "If a price is visible in the documents, state it exactly. Otherwise: Not listed in provided documents",
+    "final_summary": "One sentence summarising coverage determination by key clauses."
 }}
 
-IMPORTANT:
-- Base analysis ONLY on provided documentation
-- Maintain highly factual, neutral, professional tone
-- Avoid speculation or overconfidence
-- Provide conservative assessments with disclaimers for ambiguity
-- Focus on policy interpretation, not legal advice
-- policy_notes MUST contain insights that go BEYOND the user's specific question — these are additional facts about the policy that the customer should know but didn't ask about. They should feel like a knowledgeable broker sharing extra context.
-- policy_notes must NOT repeat or summarise what is already stated in the explanation.
-- Each note must still be document-sourced and specific (dollar amounts, named conditions, dates, percentages — not vague generalisations). Vague notes like "exclusions may apply" or "excess applies to certain claims" are UNACCEPTABLE.
-- If the policy is a Strata, Body Corporate, or Owners Corporation policy: explicitly clarify in the explanation or policy_notes that this policy covers the shared building structure and common property — NOT individual lot owners' internal unit contents or personal belongings, unless a Lot Owners Fixtures and Improvements section is present and applicable.
+IMPORTANT: Respond with valid JSON only. No markdown fences, no preamble."""
 
-Respond with valid JSON only.
-"""
-    
-    def _get_fallback_response(self) -> dict:
-        """Get fallback response when JSON parsing fails"""
+    # ── Core analysis ──────────────────────────────────────────────────────────
+
+    def analyze_coverage(self, pdf_content: str, question: str, insurance_type: str) -> dict:
+        """Analyse insurance coverage based on PDF content and user question."""
+
+        logger.info("Analyzer: cleaning text (%d chars)", len(pdf_content))
+        cleaned = self.clean_text(pdf_content)
+        content = self.truncate_content(cleaned)
+        logger.info("Analyzer: text ready (%d chars) — calling %s", len(content), self.settings.OPENAI_MODEL)
+
+        try:
+            response = self.client.beta.chat.completions.parse(
+                model=self.settings.OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": self._build_system_prompt()},
+                    {"role": "user",   "content": self._build_user_prompt(content, question, insurance_type)},
+                ],
+                response_format=CoverageAnalysisOutput,
+                temperature=0,          # deterministic output for factual analysis
+                max_tokens=2048,
+            )
+            logger.info("Analyzer: OpenAI response received")
+
+            parsed = response.choices[0].message.parsed
+            if parsed is None:
+                logger.error("Analyzer: structured output is None (refusal or parse failure)")
+                return self._fallback_parse_failure(question, insurance_type)
+
+            logger.info("Analyzer: structured output parsed successfully")
+            validated = self.validate_response(parsed.model_dump(), question, insurance_type)
+            logger.info(
+                "Analyzer: validation complete — explanation=%d notes=%d",
+                len(validated["explanation"]),
+                len(validated["policy_notes"]),
+            )
+            return validated
+
+        except Exception as e:
+            logger.error("Analyzer: unexpected error — %s", str(e), exc_info=True)
+            return self._fallback_technical_error(question, insurance_type)
+
+    # ── Fallbacks ──────────────────────────────────────────────────────────────
+
+    def _fallback_parse_failure(self, question: str, insurance_type: str) -> dict:
+        """Returned when the model output could not be parsed."""
         return {
             "policy_name": "N/A",
-            "policy_price": "N/A",
-            "policy_renewal_date": "N/A",
-            "clarity_score": 50,
-            "policy_wording_review": "Little Mention",
-            "explanation": "Unable to parse model response. Coverage assessment requires manual review of policy documentation for accurate determination of applicable terms and conditions.",
-            "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance.",
-            "policy_notes": []
+            "user_question": question,
+            "direct_answer": "Unable to determine — model response could not be parsed.",
+            "explanation": [
+                "The model returned a response that could not be mapped to the required output structure.",
+                "Coverage triggers and exclusions could not be extracted from this output.",
+                "Manual review of the policy wording is required.",
+            ],
+            "explanation_summary": "Coverage depends on successful extraction of clause-level policy wording.",
+            "policy_notes": [],
+            "policy_price": "Not listed in provided documents",
+            "final_summary": "Coverage is determined by the policy's insuring clauses, exclusions, and conditions.",
         }
-    
-    def _get_error_fallback_response(self) -> dict:
-        """Get fallback response for technical errors"""
+
+    def _fallback_technical_error(self, question: str, insurance_type: str) -> dict:
+        """Returned on API or network errors."""
         return {
             "policy_name": "N/A",
-            "policy_price": "N/A",
-            "policy_renewal_date": "N/A",
-            "clarity_score": 50,
-            "policy_wording_review": "Little Mention",
-            "explanation": "Technical error occurred during analysis. Coverage determination requires manual review of policy terms conditions exclusions and applicable circumstances for accurate assessment.",
-            "disclaimer": "This interpretation is document-based only, not advice. Seek independent financial or legal guidance.",
-            "policy_notes": []
+            "user_question": question,
+            "direct_answer": "Unable to determine — technical error during analysis.",
+            "explanation": [
+                "A technical error occurred and the analysis could not be completed.",
+                "Coverage trigger and exclusion mapping requires manual policy review.",
+                "Please retry or contact support if the issue persists.",
+            ],
+            "explanation_summary": "Coverage depends on clause-level analysis that could not be completed.",
+            "policy_notes": [],
+            "policy_price": "Not listed in provided documents",
+            "final_summary": "Coverage is determined by the policy's insuring clauses, exclusions, and conditions.",
         }
